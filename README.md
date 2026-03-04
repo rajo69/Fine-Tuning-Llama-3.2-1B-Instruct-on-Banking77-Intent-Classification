@@ -25,6 +25,8 @@ This project fine-tunes [`unsloth/Llama-3.2-1B-Instruct`](https://huggingface.co
 
 The base model scored **0/3076** in zero-shot evaluation. After one fine-tuning run of 3 epochs (~50 minutes on a T4), the fine-tuned model scores **2775/3076 (90.21%)** with trie-based constrained decoding guaranteeing no invalid label outputs.
 
+FIne tuned HuggingFace Model: [Click here](https://huggingface.co/rajo0113/banking77-llama-1b-lora)
+
 ---
 
 ## Results
