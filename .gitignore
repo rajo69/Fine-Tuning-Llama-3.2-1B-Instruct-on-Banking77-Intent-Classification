@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+
+# Unsloth source clone
+unsloth/
+
+# Data, models, logs, checkpoints (large files)
+data/
+models/
+logs/
+checkpoints/
+
+# Malformed pip install artifacts
+=*/
+=*.*
+=0*
+=1*
+=2*
+=3*
+=4*
+=5*
+
+# Private prompts and working notes
+prompt.md
+mother_prompt.md
+
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# W&B local runs
+wandb/
