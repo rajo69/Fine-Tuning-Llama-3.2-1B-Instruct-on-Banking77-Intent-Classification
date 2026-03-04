@@ -221,7 +221,7 @@ colab/
 │
 └── run_instruct.txt                   # Step-by-step run guide + troubleshooting
 
-src/                                   # Local CPU scripts (Intel Iris Xe fallback)
+src/                                   # Local CPU scripts (CPU/Integrated GPU fallback)
 ├── 1_prepare_data.py                  # Download & format dataset → data/
 ├── 2_train_intel.py                   # Train LoRA adapter → models/
 └── 3_resume_and_infer.py              # Auto-resume + inference test
