@@ -17,8 +17,6 @@
 3. Click the Google Drive authorisation popup (one unavoidable manual click)
 4. Runtime → Run all
 
-Full instructions and troubleshooting: [`colab/run_instruct.txt`](colab/run_instruct.txt)
-
 ---
 
 ## Overview
