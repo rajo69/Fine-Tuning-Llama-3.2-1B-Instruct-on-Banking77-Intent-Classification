@@ -285,6 +285,266 @@ model = model.merge_and_unload()   # optional: merge for faster inference
 
 ---
 
+## Running the Trained Model Locally with Ollama
+
+This section covers downloading the trained LoRA adapter from Google Drive,
+merging it with the base model, converting to GGUF format, and running
+inference locally via Ollama.
+
+### Prerequisites
+
+- Python 3.10+ with `pip`
+- [Ollama](https://ollama.com/download) installed and running (`ollama serve`)
+- ~8 GB free disk space
+- Git (to clone llama.cpp)
+
+---
+
+### Step 1 — Download the adapter from Google Drive
+
+Open Google Drive and navigate to:
+```
+MyDrive/banking77_finetune/models/final_lora/
+```
+
+Download the entire `final_lora/` folder. It contains:
+```
+final_lora/
+├── adapter_config.json
+├── adapter_model.safetensors   (~50 MB)
+├── tokenizer.json
+├── tokenizer_config.json
+└── special_tokens_map.json
+```
+
+Place it at a local path, e.g. `~/banking77/final_lora/`.
+
+---
+
+### Step 2 — Merge the LoRA adapter into the base model
+
+Install dependencies:
+```bash
+pip install transformers peft torch accelerate
+```
+
+Run this script (save as `merge.py`):
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+
+ADAPTER_PATH = "./final_lora"       # path to your downloaded folder
+OUTPUT_PATH  = "./banking77_merged"
+
+print("Loading base model...")
+base = AutoModelForCausalLM.from_pretrained(
+    "unsloth/Llama-3.2-1B-Instruct",
+    torch_dtype="auto",
+)
+
+print("Merging LoRA adapter...")
+model = PeftModel.from_pretrained(base, ADAPTER_PATH)
+model = model.merge_and_unload()
+
+print("Saving merged model...")
+model.save_pretrained(OUTPUT_PATH)
+
+tokenizer = AutoTokenizer.from_pretrained(ADAPTER_PATH)
+tokenizer.save_pretrained(OUTPUT_PATH)
+
+print(f"Done. Merged model saved to {OUTPUT_PATH}")
+```
+
+```bash
+python merge.py
+```
+
+This produces a standard HuggingFace model directory at `./banking77_merged/`
+(~2.5 GB for the 1B model in float32, ~1.3 GB in float16).
+
+---
+
+### Step 3 — Convert to GGUF with llama.cpp
+
+```bash
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+pip install -r requirements.txt
+```
+
+Convert and quantize (Q4_K_M gives the best quality/size tradeoff):
+```bash
+python convert_hf_to_gguf.py ../banking77_merged \
+    --outfile ../banking77_q4km.gguf \
+    --outtype q4_k_m
+```
+
+The output `banking77_q4km.gguf` will be ~800 MB.
+
+> **Note**: If `convert_hf_to_gguf.py` is not found, check the `llama.cpp` root —
+> older versions use `convert.py` instead.
+
+---
+
+### Step 4 — Create an Ollama Modelfile
+
+Create a file named `Modelfile` (no extension) next to the GGUF:
+```
+FROM ./banking77_q4km.gguf
+
+SYSTEM """You are a banking intent classifier. Given a customer query, output only the intent label as a single snake_case string from the Banking77 label set. Do not explain. Do not add punctuation. Output the label name only."""
+
+PARAMETER temperature 0
+PARAMETER stop "<|eot_id|>"
+```
+
+`temperature 0` makes output deterministic (greedy), which is what the model
+was trained and evaluated with.
+
+---
+
+### Step 5 — Load into Ollama and run
+
+```bash
+ollama create banking77 -f Modelfile
+```
+
+Test inference:
+```bash
+ollama run banking77 "I lost my card, how do I get a new one?"
+```
+
+Expected output:
+```
+card_arrival
+```
+
+Run a quick batch test:
+```bash
+ollama run banking77 "How do I top up my account using a card?"
+ollama run banking77 "Why was my transfer declined?"
+ollama run banking77 "Can I use Apple Pay with my account?"
+```
+
+---
+
+### Step 6 — Inference via Python (optional)
+
+```python
+import requests
+
+def classify_intent(query: str) -> str:
+    instruction = (
+        "Classify the following banking customer query into one of 77 "
+        "intent categories. Output only the intent label name."
+    )
+    resp = requests.post("http://localhost:11434/api/generate", json={
+        "model": "banking77",
+        "prompt": f"{instruction}\n\n{query}",
+        "stream": False,
+        "options": {"temperature": 0},
+    })
+    return resp.json()["response"].strip()
+
+print(classify_intent("I need to update my PIN"))
+# → passcode_forgotten
+```
+
+---
+
+### Troubleshooting
+
+**`ollama create` fails with "invalid model file"**
+Ensure `FROM` points to the correct absolute or relative path to the `.gguf`
+file. Use an absolute path if unsure:
+```
+FROM /home/user/banking77/banking77_q4km.gguf
+```
+
+**Model outputs long text instead of a label**
+The SYSTEM prompt is not being applied. Verify Ollama version ≥ 0.1.30 which
+added SYSTEM support in Modelfiles. Update with:
+```bash
+ollama update
+```
+
+**Merge script is slow (no GPU)**
+Add `device_map="cpu"` to `from_pretrained` calls. The merge itself is a
+matrix addition — it only runs once and does not require a GPU.
+
+---
+
+## What Files to Push to Make the Model Publicly Available
+
+GitHub is **not suitable** for model weights — files over 100 MB are rejected
+even with Git LFS (LFS has bandwidth limits on free plans). The standard
+approach for sharing fine-tuned models is **Hugging Face Hub**.
+
+### Option A — Push the LoRA adapter to Hugging Face Hub (recommended)
+
+The adapter is ~50 MB and loads on top of the publicly available base model,
+so users only need to download the small diff.
+
+```bash
+pip install huggingface_hub
+huggingface-cli login   # paste your HF token
+```
+
+```python
+from huggingface_hub import HfApi
+
+api = HfApi()
+api.create_repo("your-username/banking77-llama-1b-lora", exist_ok=True)
+api.upload_folder(
+    folder_path="./final_lora",
+    repo_id="your-username/banking77-llama-1b-lora",
+    repo_type="model",
+)
+```
+
+Users can then load it with:
+```python
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
+
+base  = AutoModelForCausalLM.from_pretrained("unsloth/Llama-3.2-1B-Instruct")
+model = PeftModel.from_pretrained(base, "your-username/banking77-llama-1b-lora")
+model = model.merge_and_unload()
+```
+
+### Option B — Push the GGUF to Hugging Face Hub (for direct Ollama use)
+
+```python
+api.create_repo("your-username/banking77-llama-1b-gguf", exist_ok=True)
+api.upload_file(
+    path_or_fileobj="./banking77_q4km.gguf",
+    path_in_repo="banking77_q4km.gguf",
+    repo_id="your-username/banking77-llama-1b-gguf",
+    repo_type="model",
+)
+```
+
+Users can then run directly:
+```bash
+ollama run hf.co/your-username/banking77-llama-1b-gguf
+```
+
+### Option C — Share the Google Drive folder (quickest, no account needed)
+
+Right-click `MyDrive/banking77_finetune/models/final_lora/` in Drive →
+Share → Anyone with the link → Viewer. Paste the link in your README.
+
+### Summary
+
+| Option | Size to upload | User experience | Best for |
+|---|---|---|---|
+| HF Hub — LoRA adapter | ~50 MB | Load with PEFT | Researchers / developers |
+| HF Hub — GGUF | ~800 MB | `ollama run hf.co/...` | End users / Ollama |
+| Google Drive link | ~50 MB | Manual download | Quick sharing |
+| GitHub (do NOT) | — | Rejected >100 MB | — |
+
+---
+
 ## References
 
 - Hu et al. (2021). [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685)
